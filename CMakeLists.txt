@@ -131,7 +131,10 @@ else()
   endif()
 endif()
 
-if(GIT_FOUND)
+if(MAXSCALE_COMMIT)
+  # Given on the command line, e.g. when building from a source tarball that has no .git directory.
+  message(STATUS "Commit ID (from -DMAXSCALE_COMMIT): ${MAXSCALE_COMMIT}")
+elseif(GIT_FOUND)
   message(STATUS "Found git ${GIT_VERSION_STRING}")
   execute_process(COMMAND ${GIT_EXECUTABLE} rev-list --max-count=1 HEAD
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
