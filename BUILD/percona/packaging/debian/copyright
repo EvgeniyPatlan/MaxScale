@@ -1,0 +1,15 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: MaxScale
+Source: https://github.com/mariadb-corporation/MaxScale
+
+Files: *
+Copyright: 2018 MariaDB Corporation Ab
+           2023 MariaDB plc
+License: BUSL-1.1
+ Use of this software is governed by the Business Source License 1.1 included
+ in the file /usr/share/maxscale/LICENSE.TXT and at www.mariadb.com/bsl11.
+ On the Change Date stated in that file, use of this software will be governed
+ by version 2 or later of the GNU General Public License.
+ .
+ The complete text of the GNU General Public License version 2 can be found in
+ /usr/share/common-licenses/GPL-2 on Debian systems.

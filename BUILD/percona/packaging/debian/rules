@@ -1,0 +1,59 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+# The bundled libmicrohttpd does not build with the link-time optimization that recent Ubuntu
+# releases enable by default: it warns, and MaxScale builds with -Werror.
+export DEB_BUILD_MAINT_OPTIONS = optimize=-lto
+
+include /usr/share/dpkg/architecture.mk
+
+EXTRA_CMAKE_FLAGS ?=
+
+# The tarball has no .git directory; the commit ID travels in percona-build.properties.
+MAXSCALE_COMMIT := $(shell sed -n 's/^COMMIT=//p' percona-build.properties 2>/dev/null)
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=build
+
+override_dh_auto_configure:
+	# debhelper sets FETCHCONTENT_FULLY_DISCONNECTED=ON, but the LDI filter downloads
+	# libmarias3 with FetchContent at configure time.
+	dh_auto_configure -- \
+		-DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_COLOR_MAKEFILE=N \
+		-DPACKAGE=Y \
+		-DPACKAGE_NAME=percona-maxscale \
+		-DTARGET_COMPONENT=core,devel \
+		-DSKIP_CPACK=Y \
+		-DBUILD_TESTS=N \
+		-DMAXSCALE_COMMIT=$(MAXSCALE_COMMIT) \
+		$(EXTRA_CMAKE_FLAGS)
+
+# CMake installs etc/maxscale.cnf.template only when TARGET_COMPONENT is exactly "core", so
+# debian/percona-maxscale.install takes it from the source tree instead.
+
+# MaxScale's own modules live in a private directory and have no shlibs information.
+override_dh_shlibdeps:
+	dh_shlibdeps -l$(CURDIR)/debian/percona-maxscale/usr/lib/$(DEB_HOST_MULTIARCH)/maxscale \
+		-- --ignore-missing-info
+
+# The systemd unit and the init script are placed by the postinst script, as upstream does.
+override_dh_installsystemd:
+
+override_dh_installinit:
+
+# maxscale_pam_auth_tool has to keep its setuid bit or PAM authentication fails; dh_fixperms
+# removes setuid bits from everything by default.
+override_dh_fixperms:
+	dh_fixperms --exclude usr/bin/maxscale_pam_auth_tool
+
+# Ship the binaries unstripped, like the RPM build.
+override_dh_strip:
+
+override_dh_dwz:
+
+# The unit tests are not built in packaging builds.
+override_dh_auto_test:

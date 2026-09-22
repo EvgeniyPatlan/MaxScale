@@ -1,0 +1,63 @@
+Source: percona-maxscale
+Section: database
+Priority: optional
+Maintainer: Percona Build Team <info@percona.com>
+Homepage: https://github.com/mariadb-corporation/MaxScale
+Standards-Version: 4.6.2
+# Node.js (>= 16) and npm are needed for MaxCtrl and the GUI. They are intentionally not listed
+# here because the distribution packages are frequently too old; install them with
+# BUILD/install_build_deps.sh, which fetches a suitable version.
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.16),
+               bison,
+               flex,
+               git,
+               libboost-all-dev,
+               libcurl4-openssl-dev,
+               libgcrypt20-dev,
+               libgnutls28-dev,
+               libicu-dev,
+               libjansson-dev,
+               libkrb5-dev,
+               liblzma-dev,
+               libmicrohttpd-dev,
+               libpam0g-dev,
+               libpcre2-dev,
+               libsasl2-dev,
+               libsqlite3-dev,
+               libssh-dev,
+               libssl-dev,
+               libsystemd-dev,
+               pkg-config,
+               tcl,
+               unixodbc-dev,
+               uuid-dev,
+               zlib1g-dev
+
+Package: percona-maxscale
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Provides: maxscale (= ${binary:Version})
+Conflicts: maxscale
+Replaces: maxscale, maxscale-experimental (<< 6)
+Description: MaxScale - An intelligent database proxy
+ MariaDB MaxScale is an intelligent proxy that allows forwarding of
+ database statements to one or more database servers using complex rules,
+ a semantic understanding of the database statements and the roles of
+ the various servers within the backend cluster of databases.
+ .
+ MaxScale is designed to provide load balancing and high availability
+ functionality transparently to the applications. In addition it provides
+ a highly scalable and flexible architecture, with plugin components to
+ support different protocols and routing decisions.
+
+Package: percona-maxscale-devel
+Section: libdevel
+Architecture: any
+Depends: percona-maxscale (= ${binary:Version}), ${misc:Depends}
+Provides: maxscale-devel (= ${binary:Version})
+Conflicts: maxscale-devel
+Replaces: maxscale-devel
+Description: MaxScale plugin development headers
+ This package contains header files required for plugin module development for
+ MariaDB MaxScale. The source of MariaDB MaxScale is not required.

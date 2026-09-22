@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    sh /usr/share/maxscale/postinst
+fi
+
+#DEBHELPER#

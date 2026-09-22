@@ -1,0 +1,5 @@
+etc/maxscale.cnf.template
+usr/bin/*
+usr/lib/*/maxscale/*
+usr/share/maxscale/*
+usr/share/man/man1/*

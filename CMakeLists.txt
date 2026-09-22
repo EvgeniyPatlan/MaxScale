@@ -275,7 +275,12 @@ if(WITH_SCRIPTS)
   include(cmake/init_scripts.cmake)
 endif()
 
-if(PACKAGE)
+# The spec file and debian/rules build the packages themselves and only need the packaging
+# install layout, not the CPack configuration. CPack also supports one component at a time,
+# while native packaging builds several (core and devel) in a single pass.
+option(SKIP_CPACK "Do not configure CPack even when PACKAGE is enabled" OFF)
+
+if(PACKAGE AND NOT SKIP_CPACK)
   # Configure packaging
   include(cmake/package.cmake)
 
@@ -300,12 +305,17 @@ if(PACKAGE)
     add_dependencies(dist maxctrl_node_modules)
   endif()
 
+endif()
+
+if(PACKAGE)
   # Install the files copied by the postinst script into the share folder
   install_program(${CMAKE_BINARY_DIR}/maxscale core)
   install_file(${CMAKE_BINARY_DIR}/maxscale.conf core)
   install_program(${CMAKE_BINARY_DIR}/postinst core)
   install_program(${CMAKE_BINARY_DIR}/prerm core)
+endif()
 
+if(PACKAGE AND NOT SKIP_CPACK)
   # The inclusion of CPack needs to be the last effective packaging related command. All
   # configurations to packaging done after the call will be ignored.
   include(CPack)
