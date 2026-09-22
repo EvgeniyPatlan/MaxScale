@@ -24,7 +24,10 @@ Version:        @@VERSION@@
 Release:        @@RELEASE@@%{?dist}
 Summary:        MaxScale - An intelligent database proxy
 
-License:        BUSL-1.1
+# MaxScale 23.08 was released under the Business Source License 1.1 with the Change Date
+# 2026-09-21. That date has passed, so this version is governed by the Change License, version 2
+# or later of the GNU General Public License. The original BSL text ships as LICENSE.TXT.
+License:        GPL-2.0-or-later
 URL:            https://github.com/mariadb-corporation/MaxScale
 Source0:        %{name}-%{version}.tar.gz
 
@@ -119,6 +122,10 @@ cd ..
 
 # CMake installs this only when TARGET_COMPONENT is exactly "core", so do it here.
 install -D -m 0644 etc/maxscale.cnf.template %{buildroot}%{_sysconfdir}/maxscale.cnf.template
+
+# The Change License text; RPM-based distributions ship no shared copy of it.
+install -D -m 0644 BUILD/percona/packaging/licenses/GPL-2.0.txt \
+    %{buildroot}%{_datadir}/maxscale/GPL-2.0.txt
 
 %post
 sh %{_datadir}/maxscale/postinst
