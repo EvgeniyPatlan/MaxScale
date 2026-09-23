@@ -14,6 +14,9 @@
 #
 
 %global upstream_name maxscale
+# The bundled libmicrohttpd does not build with the link-time optimization that RHEL 10 and
+# later put into the default build flags: it warns, and MaxScale builds with -Werror.
+%global _lto_cflags %{nil}
 # Ship the binaries unstripped and the man pages uncompressed, like the CPack packages did.
 # This also disables the debuginfo subpackage.
 %global __os_install_post %{nil}
