@@ -161,6 +161,22 @@ enable_rpm_extra_repos() {
     esac
 }
 
+# Build dependencies for Amazon Linux, which has no EPEL and lacks some of the packages the
+# upstream dependency script installs. librdkafka, libmemcached and hiredis are bundled instead.
+install_deps_amazonlinux() {
+    # cmake is installed as a package so that the BuildRequires of the spec file resolve, even
+    # though install_cmake.sh may replace the binary with a newer one.
+    yum -y install \
+        bison boost-devel cmake cyrus-sasl-devel flex gcc gcc-c++ gnutls-devel jansson-devel \
+        krb5-devel libatomic libcurl-devel libgcrypt-devel libicu-devel libmicrohttpd-devel \
+        libssh-devel libuuid-devel libxml2-devel make openssl-devel pam-devel pcre2-devel \
+        pkgconfig sqlite-devel systemd-devel tcl unixODBC-devel wget xz-devel zlib-devel \
+        || die "Failed to install the build dependencies"
+
+    # Not present in every Amazon Linux release, and not required by the build.
+    yum -y install libedit-devel tcl-devel || true
+}
+
 version_ge() {
     [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
@@ -230,7 +246,18 @@ install_deps() {
         git clone "$GIT_REPO" "$deps_src" && git -C "$deps_src" checkout "$BRANCH" \
             || die "Failed to clone $GIT_REPO ($BRANCH) for the dependency scripts"
     fi
-    bash -x "$deps_src/BUILD/install_build_deps.sh" "$CMAKE_VERSION" "$NODE_MAJOR"
+    if [ "$OS_ID" = "amzn" ]
+    then
+        # The upstream script installs its packages in one transaction that includes
+        # librdkafka-devel and libmemcached-devel, which Amazon Linux does not have; dnf then
+        # installs nothing at all. Both are bundled by the build, so install the rest here and
+        # use only the CMake and Node.js helpers of the upstream script.
+        install_deps_amazonlinux
+        bash -x "$deps_src/BUILD/install_cmake.sh" "$CMAKE_VERSION" || die "Failed to install CMake"
+        bash -x "$deps_src/BUILD/install_npm.sh" "$NODE_MAJOR" || die "Failed to install Node.js"
+    else
+        bash -x "$deps_src/BUILD/install_build_deps.sh" "$CMAKE_VERSION" "$NODE_MAJOR"
+    fi
     rm -rf "$deps_src"
 
     # Tools for building the source and binary packages, which the upstream script does not install.
