@@ -13,6 +13,8 @@
 #                         (the layout the builder produces) or the packages directly in DIR.
 #     --platforms=LIST    Space separated subset of: el8 el9 el10 amzn2023 jammy noble
 #                         bookworm trixie (default: all of them)
+#     --port-base=N       First of the five ports used on the host (default: 3000), so that
+#                         several runs can share a machine
 #     --keep              Leave the MariaDB backends running afterwards
 #     --help
 #
@@ -22,15 +24,22 @@ set -o pipefail
 PACKAGES=
 PLATFORMS="el8 el9 el10 amzn2023 jammy noble bookworm trixie"
 KEEP=0
+PORT_BASE=3000
 
-MASTER_PORT=3000
-REPLICA_PORT=3001
-RWSPLIT_PORT=4006
-READCONN_PORT=4008
-ADMIN_PORT=8989
 BACKEND_IMAGE=mariadb:10.11
-MASTER_ID=3000
-REPLICA_ID=3001
+
+# Derived from PORT_BASE so that several runs can share a machine.
+set_ports() {
+    MASTER_PORT=$PORT_BASE
+    REPLICA_PORT=$((PORT_BASE + 1))
+    RWSPLIT_PORT=$((PORT_BASE + 2))
+    READCONN_PORT=$((PORT_BASE + 3))
+    ADMIN_PORT=$((PORT_BASE + 4))
+    MASTER_ID=$MASTER_PORT
+    REPLICA_ID=$REPLICA_PORT
+    MASTER_CONTAINER="mxsverify-master-$PORT_BASE"
+    REPLICA_CONTAINER="mxsverify-replica-$PORT_BASE"
+}
 
 usage() {
     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -71,6 +80,7 @@ parse_arguments() {
         case "$arg" in
             --packages=*)  PACKAGES="$val" ;;
             --platforms=*) PLATFORMS="$val" ;;
+            --port-base=*) PORT_BASE="$val" ;;
             --keep)        KEEP=1 ;;
             --help)        usage ;;
             *)             die "Unknown option: $arg" ;;
@@ -109,14 +119,14 @@ wait_for_backend() {  # wait_for_backend <port>
 
 start_backends() {
     echo "== starting MariaDB backends"
-    docker rm -f mxsverify-master mxsverify-replica > /dev/null 2>&1
+    docker rm -f "$MASTER_CONTAINER" "$REPLICA_CONTAINER" > /dev/null 2>&1
 
-    docker run -d --name mxsverify-master --network host \
+    docker run -d --name "$MASTER_CONTAINER" --network host \
         -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1 "$BACKEND_IMAGE" \
         --server-id=$MASTER_ID --port=$MASTER_PORT --log-bin=binlog --binlog-format=ROW \
         --log-slave-updates --gtid-strict-mode=1 > /dev/null || die "Cannot start the master"
 
-    docker run -d --name mxsverify-replica --network host \
+    docker run -d --name "$REPLICA_CONTAINER" --network host \
         -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1 "$BACKEND_IMAGE" \
         --server-id=$REPLICA_ID --port=$REPLICA_PORT --log-bin=binlog --binlog-format=ROW \
         --log-slave-updates --gtid-strict-mode=1 > /dev/null || die "Cannot start the replica"
@@ -148,7 +158,7 @@ start_backends() {
 }
 
 stop_backends() {
-    docker rm -f mxsverify-master mxsverify-replica > /dev/null 2>&1
+    docker rm -f "$MASTER_CONTAINER" "$REPLICA_CONTAINER" > /dev/null 2>&1
 }
 
 write_maxscale_config() {  # write_maxscale_config <file>
@@ -210,6 +220,11 @@ write_container_script() {  # write_container_script <file>
 set -o errexit
 set -o xtrace
 
+# maxctrl talks to 127.0.0.1:8989 by default, but the admin port follows --port-base.
+admin_port=$1
+printf '#!/bin/sh\nexec maxctrl --hosts 127.0.0.1:%s "$@"\n' "$admin_port" > /usr/local/bin/mxctl
+chmod +x /usr/local/bin/mxctl
+
 if command -v apt-get > /dev/null
 then
     apt-get update -qq
@@ -234,10 +249,10 @@ maxscale -U maxscale -f /etc/maxscale.cnf --log=stdout > /var/log/maxscale/stdou
 
 for i in $(seq 1 60)
 do
-    maxctrl list servers > /dev/null 2>&1 && break
+    mxctl list servers > /dev/null 2>&1 && break
     sleep 1
 done
-maxctrl list servers > /dev/null 2>&1 || { echo "MaxScale did not start"; tail -20 /var/log/maxscale/stdout.log; exit 1; }
+mxctl list servers > /dev/null 2>&1 || { echo "MaxScale did not start"; tail -20 /var/log/maxscale/stdout.log; exit 1; }
 EOF
 }
 
@@ -282,7 +297,7 @@ verify_platform() {  # verify_platform <platform>
     write_maxscale_config "$pkgdir/maxscale.cnf"
     write_container_script "$pkgdir/setup.sh"
 
-    container="mxsverify-$platform"
+    container="mxsverify-$platform-$PORT_BASE"
     docker rm -f "$container" > /dev/null 2>&1
     # --init reaps the MaxScale process once it exits, so that the shutdown check does not
     # find a zombie.
@@ -294,7 +309,7 @@ verify_platform() {  # verify_platform <platform>
         return 1
     fi
 
-    if ! docker exec "$container" sh /pkgs/setup.sh > "$pkgdir/setup.log" 2>&1
+    if ! docker exec "$container" sh /pkgs/setup.sh "$ADMIN_PORT" > "$pkgdir/setup.log" 2>&1
     then
         echo "   FAIL  install and start"
         tail -15 "$pkgdir/setup.log" | sed 's/^/         /'
@@ -306,7 +321,7 @@ verify_platform() {  # verify_platform <platform>
 
     # The monitor must see one master and one replica.
     check "monitor detects the topology" \
-        in_container "$container" "maxctrl list servers --tsv | grep -q 'Master, Running' && maxctrl list servers --tsv | grep -q 'Slave, Running'" || failures=$((failures + 1))
+        in_container "$container" "mxctl list servers --tsv | grep -q 'Master, Running' && mxctl list servers --tsv | grep -q 'Slave, Running'" || failures=$((failures + 1))
 
     # Writes and reads through readwritesplit.
     check "DDL and DML through readwritesplit" \
@@ -334,7 +349,7 @@ verify_platform() {  # verify_platform <platform>
         in_container "$container" "curl -s -f -o /dev/null http://127.0.0.1:$ADMIN_PORT/" || failures=$((failures + 1))
 
     check "modules are loaded" \
-        in_container "$container" "maxctrl list modules --tsv | grep -q mariadbmon && maxctrl list modules --tsv | grep -q readwritesplit" || failures=$((failures + 1))
+        in_container "$container" "mxctl list modules --tsv | grep -q mariadbmon && mxctl list modules --tsv | grep -q readwritesplit" || failures=$((failures + 1))
 
     check "no errors in the log" \
         in_container "$container" "! grep -iE '  (error|alert) *:' /var/log/maxscale/stdout.log" || failures=$((failures + 1))
@@ -361,6 +376,7 @@ verify_platform() {  # verify_platform <platform>
 
 #main
 parse_arguments "$@"
+set_ports
 check_prerequisites
 
 # Accept both the builder layout and a flat directory.
