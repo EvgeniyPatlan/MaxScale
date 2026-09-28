@@ -1,0 +1,88 @@
+#
+# Hardened Percona MaxScale image, built on Debian.
+#
+# Compared with the UBI9 image it keeps only what MaxScale needs at runtime: recommended
+# packages are not installed, the package manager caches, documentation and manual pages are
+# removed, and no file keeps its setuid or setgid bit.
+#
+# Removing the setuid bits disables PAM authentication, which needs a setuid
+# maxscale_pam_auth_tool. Use the UBI9 image when the PAM authenticator is required.
+#
+FROM debian:12-slim
+
+# Please don't remove old-style LABEL since it's needed for RedHat certification
+LABEL name="Percona MaxScale" \
+      vendor="Percona" \
+      summary="Database proxy for MariaDB and MySQL, hardened image" \
+      description="MariaDB MaxScale is a database proxy that forwards database statements to one or more servers, using complex rules, a semantic understanding of the statements and the roles of the servers in the backend cluster. This image is built on Debian and carries only what MaxScale needs at runtime." \
+      maintainer="Percona Development <info@percona.com>"
+
+LABEL org.opencontainers.image.title="Percona MaxScale (hardened)"
+LABEL org.opencontainers.image.vendor="Percona"
+LABEL org.opencontainers.image.description="MariaDB MaxScale is a database proxy that forwards \
+database statements to one or more servers. This image is built on Debian and carries only what \
+MaxScale needs at runtime."
+LABEL org.opencontainers.image.license="GPL-2.0-or-later"
+LABEL org.opencontainers.image.authors="info@percona.com"
+
+ARG MAXSCALE_VERSION=23.08.12
+ARG MAXSCALE_RELEASE=1
+ARG REPO_COMPONENT=experimental
+
+ENV MAXSCALE_VERSION=${MAXSCALE_VERSION}
+LABEL org.label-schema.schema-version=${MAXSCALE_VERSION}
+LABEL org.opencontainers.image.version=${MAXSCALE_VERSION}
+
+RUN set -ex; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg2 procps; \
+    \
+    # The repository package is verified against the Percona packaging key before it is used.
+    export GNUPGHOME="$(mktemp -d)"; \
+    curl -fsSL -o /tmp/percona-release.deb https://repo.percona.com/apt/percona-release_latest.generic_all.deb; \
+    curl -fsSL https://repo.percona.com/apt/percona-keyring.gpg -o /tmp/percona-keyring.gpg || true; \
+    apt-get install -y --no-install-recommends /tmp/percona-release.deb; \
+    rm -rf "$GNUPGHOME" /tmp/percona-release.deb /tmp/percona-keyring.gpg; \
+    \
+    percona-release enable maxscale ${REPO_COMPONENT}; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        percona-maxscale=${MAXSCALE_VERSION}-${MAXSCALE_RELEASE}.bookworm; \
+    \
+    # The licenses are collected before the documentation is pruned.
+    mkdir -p /licenses; \
+    cp /usr/share/maxscale/LICENSE.TXT /licenses/LICENSE.maxscale; \
+    cp /usr/share/doc/percona-maxscale/copyright /licenses/copyright.percona-maxscale; \
+    cp /usr/share/common-licenses/GPL-2 /licenses/GPL-2.txt; \
+    \
+    # Hardening: no package manager caches, no manual pages, no documentation beyond the
+    # copyright files, and no setuid or setgid binaries anywhere in the image.
+    apt-get purge -y --auto-remove gnupg2; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /usr/share/man/* /usr/share/info/* /tmp/* /var/tmp/*; \
+    find /usr/share/doc -type f ! -name copyright -delete; \
+    find /usr/share/doc -type d -empty -delete; \
+    find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + || true
+
+RUN set -ex; \
+    install -o maxscale -g maxscale -m 0755 -d \
+        /var/lib/maxscale /var/log/maxscale /var/cache/maxscale /run/maxscale \
+        /var/lib/maxscale/maxscale.cnf.d
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY maxscale.cnf /etc/maxscale.cnf
+RUN chmod +x /usr/local/bin/entrypoint.sh; \
+    chown maxscale:maxscale /etc/maxscale.cnf
+
+# readwritesplit, readconnroute and the REST API / GUI
+EXPOSE 4006 4008 8989
+
+VOLUME ["/var/lib/maxscale", "/var/log/maxscale"]
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD maxctrl list servers > /dev/null || exit 1
+
+USER maxscale
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["maxscale"]

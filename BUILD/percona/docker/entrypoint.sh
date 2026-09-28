@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Entrypoint of the Percona MaxScale image.
 #
