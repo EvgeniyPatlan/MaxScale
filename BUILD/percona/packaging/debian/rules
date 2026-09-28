@@ -16,6 +16,12 @@ MAXSCALE_COMMIT := $(shell sed -n 's/^COMMIT=//p' percona-build.properties 2>/de
 %:
 	dh $@ --buildsystem=cmake --builddirectory=build
 
+# Ubuntu's dpkg compresses the members with zstd by default. The reprepro that maintains
+# repo.percona.com cannot read a zstd control.tar and rejects such packages, so build with
+# xz, which every distribution and the repository tooling understand.
+override_dh_builddeb:
+	dh_builddeb -- -Zxz
+
 override_dh_auto_configure:
 	# debhelper sets FETCHCONTENT_FULLY_DISCONNECTED=ON, but the LDI filter downloads
 	# libmarias3 with FetchContent at configure time.
