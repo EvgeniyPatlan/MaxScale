@@ -1,0 +1,14 @@
+# Minimal MaxScale configuration for the container image.
+#
+# Replace it with your own, for example:
+#     docker run -v /path/to/maxscale.cnf:/etc/maxscale.cnf:ro percona/percona-maxscale
+# or drop additional files into /etc/maxscale.cnf.d.
+#
+# The REST API and the GUI listen on 8989 for every address so that they are reachable from
+# outside the container. Change admin_secure_gui and the admin users before exposing them.
+
+[maxscale]
+threads=auto
+admin_host=0.0.0.0
+admin_port=8989
+admin_secure_gui=false
