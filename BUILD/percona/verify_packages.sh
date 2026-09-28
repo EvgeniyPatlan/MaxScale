@@ -8,9 +8,14 @@
 # and the GUI answer. The backends and MaxScale share the host network, so the platforms are
 # verified one after another.
 #
-# Usage: verify_packages.sh --packages=DIR [OPTIONS]
+# Usage: verify_packages.sh (--packages=DIR | --repo-component=NAME) [OPTIONS]
 #     --packages=DIR      Directory with the packages. Either rpm/ and deb/ subdirectories
 #                         (the layout the builder produces) or the packages directly in DIR.
+#     --repo-component=NAME
+#                         Install from repo.percona.com instead, with
+#                         "percona-release enable maxscale NAME", e.g. experimental,
+#                         testing, laboratory or release. This is what users install.
+#     --version=X.Y.Z     Fail unless the installed MaxScale reports this version
 #     --platforms=LIST    Space separated subset of: el8 el9 el10 amzn2023 jammy noble
 #                         bookworm trixie (default: all of them)
 #     --port-base=N       First of the five ports used on the host (default: 3000), so that
@@ -22,6 +27,8 @@
 set -o pipefail
 
 PACKAGES=
+REPO_COMPONENT=
+VERSION=
 PLATFORMS="el8 el9 el10 amzn2023 jammy noble bookworm trixie"
 KEEP=0
 PORT_BASE=3000
@@ -79,6 +86,8 @@ parse_arguments() {
         local val=${arg#*=}
         case "$arg" in
             --packages=*)  PACKAGES="$val" ;;
+            --repo-component=*) REPO_COMPONENT="$val" ;;
+            --version=*)   VERSION="$val" ;;
             --platforms=*) PLATFORMS="$val" ;;
             --port-base=*) PORT_BASE="$val" ;;
             --keep)        KEEP=1 ;;
@@ -86,8 +95,15 @@ parse_arguments() {
             *)             die "Unknown option: $arg" ;;
         esac
     done
-    [ -n "$PACKAGES" ] || usage
-    PACKAGES=$(cd "$PACKAGES" && pwd) || die "No such directory: $PACKAGES"
+    if [ -n "$PACKAGES" ] && [ -n "$REPO_COMPONENT" ]
+    then
+        die "Use either --packages or --repo-component, not both"
+    fi
+    [ -n "$PACKAGES" ] || [ -n "$REPO_COMPONENT" ] || usage
+    if [ -n "$PACKAGES" ]
+    then
+        PACKAGES=$(cd "$PACKAGES" && pwd) || die "No such directory: $PACKAGES"
+    fi
 }
 
 check_prerequisites() {
@@ -222,6 +238,9 @@ set -o xtrace
 
 # maxctrl talks to 127.0.0.1:8989 by default, but the admin port follows --port-base.
 admin_port=$1
+# Empty for local packages, otherwise the repo.percona.com component to install from.
+repo_component=$2
+expected_version=$3
 printf '#!/bin/sh\nexec maxctrl --hosts 127.0.0.1:%s "$@"\n' "$admin_port" > /usr/local/bin/mxctl
 chmod +x /usr/local/bin/mxctl
 
@@ -231,16 +250,41 @@ then
     # curl and pgrep are used by the checks; some images have neither.
     command -v curl > /dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl
     command -v pgrep > /dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq procps
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /pkgs/*.deb
+
+    if [ -n "$repo_component" ]
+    then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget gnupg2 lsb-release
+        wget -q https://repo.percona.com/apt/percona-release_latest.generic_all.deb
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./percona-release_latest.generic_all.deb
+        percona-release enable maxscale "$repo_component"
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq percona-maxscale percona-maxscale-devel
+    else
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /pkgs/*.deb
+    fi
 else
     # Installing curl on Amazon Linux would conflict with the preinstalled curl-minimal.
     command -v curl > /dev/null || dnf install -y -q curl
     command -v pgrep > /dev/null || dnf install -y -q procps-ng
-    dnf install -y -q /pkgs/*.rpm
+
+    if [ -n "$repo_component" ]
+    then
+        dnf install -y -q https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+        percona-release enable maxscale "$repo_component"
+        dnf install -y -q percona-maxscale percona-maxscale-devel
+    else
+        dnf install -y -q /pkgs/*.rpm
+    fi
 fi
 
 # The packages must not be built for a different distribution.
 maxscale --version
+
+if [ -n "$expected_version" ] && ! maxscale --version | grep -q "$expected_version"
+then
+    echo "Expected MaxScale $expected_version but got: $(maxscale --version)"
+    exit 1
+fi
 
 install -o maxscale -g maxscale -d /var/log/maxscale /var/lib/maxscale /var/cache/maxscale /run/maxscale
 cp /cnf/maxscale.cnf /etc/maxscale.cnf
@@ -283,17 +327,20 @@ verify_platform() {  # verify_platform <platform>
     local platform=$1 image container pkgdir failures=0
     image=$(platform_image "$platform") || { echo "!! unknown platform $platform"; return 1; }
 
-    local packages
-    packages=$(platform_packages "$platform")
-    if [ -z "$packages" ]
+    local packages=
+    if [ -z "$REPO_COMPONENT" ]
     then
-        echo "-- $platform: no packages found, skipped"
-        return 0
+        packages=$(platform_packages "$platform")
+        if [ -z "$packages" ]
+        then
+            echo "-- $platform: no packages found, skipped"
+            return 0
+        fi
     fi
 
     echo "== $platform ($image)"
     pkgdir=$(mktemp -d)
-    echo "$packages" | while read -r p; do cp "$p" "$pkgdir/"; done
+    [ -n "$packages" ] && echo "$packages" | while read -r p; do cp "$p" "$pkgdir/"; done
     write_maxscale_config "$pkgdir/maxscale.cnf"
     write_container_script "$pkgdir/setup.sh"
 
@@ -309,7 +356,8 @@ verify_platform() {  # verify_platform <platform>
         return 1
     fi
 
-    if ! docker exec "$container" sh /pkgs/setup.sh "$ADMIN_PORT" > "$pkgdir/setup.log" 2>&1
+    if ! docker exec "$container" sh /pkgs/setup.sh "$ADMIN_PORT" "$REPO_COMPONENT" "$VERSION" \
+        > "$pkgdir/setup.log" 2>&1
     then
         echo "   FAIL  install and start"
         tail -15 "$pkgdir/setup.log" | sed 's/^/         /'
@@ -380,7 +428,7 @@ set_ports
 check_prerequisites
 
 # Accept both the builder layout and a flat directory.
-[ -d "$PACKAGES" ] || die "No such directory: $PACKAGES"
+[ -z "$PACKAGES" ] || [ -d "$PACKAGES" ] || die "No such directory: $PACKAGES"
 
 trap '[ "$KEEP" = 1 ] || stop_backends' EXIT
 
